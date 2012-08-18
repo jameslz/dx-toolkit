@@ -1795,6 +1795,14 @@ def find_data(args):
     get_output_flag(args)
     properties = get_properties_from_args(args.properties)
     try:
+        if args.no_glob or args.brief or args.name is None:
+            args.glob_name = None
+        else:
+            # Stash the name and filter it on the client side.
+            # Warning: client-side globbing is a transitional feature pending server-side pattern matching
+            args.glob_name = args.name
+            args.name = None
+
         results = list(dxpy.find_data_objects(classname=args.classname,
                                               state=args.state,
                                               visibility=args.visibility,
@@ -1810,6 +1818,11 @@ def find_data(args):
                                               created_after=args.created_after,
                                               created_before=args.created_before,
                                               describe=(not args.brief)))
+
+        if args.glob_name:
+            import fnmatch
+            results = [r for r in results if fnmatch.fnmatch(r['describe']['name'], args.glob_name)]
+
         if args.json:
             print json.dumps(results, indent=4)
             return
@@ -2436,6 +2449,10 @@ no_color_arg.add_argument('--color',
 json_arg = argparse.ArgumentParser(add_help=False)
 json_arg.add_argument('--json', help='Display return value in JSON', action='store_true')
 
+# Warning: client-side globbing is a transitional feature pending server-side pattern matching
+no_glob_arg = argparse.ArgumentParser(add_help=False)
+no_glob_arg.add_argument('--no-glob', help="Don't use pattern matching in names", action='store_true')
+
 stdout_args = argparse.ArgumentParser(add_help=False)
 stdout_args_gp = stdout_args.add_mutually_exclusive_group()
 stdout_args_gp.add_argument('--brief', help='Display a brief version of the return value.  For most commands, prints a DNAnexus ID per line.', action='store_true')
@@ -2742,7 +2759,7 @@ parser_find_jobs.add_argument('-n', '--num-results', type=int, help='Max number 
 parser_find_jobs.set_defaults(func=find_jobs)
 parser_map['find jobs'] = parser_find_jobs
 
-parser_find_data = subparsers_find.add_parser('data', help='Finds data objects', parents=[stdout_args, json_arg, no_color_arg], prog='dx find data')
+parser_find_data = subparsers_find.add_parser('data', help='Finds data objects', parents=[stdout_args, json_arg, no_color_arg, no_glob_arg], prog='dx find data')
 parser_find_data.add_argument('--class', dest='classname', choices=['record', 'file', 'gtable', 'applet', 'table'], help='Data object class')
 parser_find_data.add_argument('--state', choices=['open', 'closing', 'closed', 'any'], help='State of the object')
 parser_find_data.add_argument('--visibility', choices=['hidden', 'visible', 'either'], default='visible', help='Whether the object is hidden or not')
