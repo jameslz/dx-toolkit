@@ -17,13 +17,45 @@
 #   License for the specific language governing permissions and limitations
 #   under the License.
 
-import os, unittest, json, tempfile, subprocess, csv
+import os, unittest, json, tempfile, subprocess, csv, shutil, re
 
-def run(command):
-    # print "Running", command
-    result = subprocess.check_output(command, shell=True)
-    print "Result for", command, ":\n", result
-    return result
+from contextlib import contextmanager
+
+def check_output(*popenargs, **kwargs):
+    """
+    Adapted version of the builtin subprocess.check_output which sets a
+    "stderr" field on the resulting exception (in addition to "output")
+    if the subprocess fails. (If the command succeeds, the contents of
+    stderr are discarded.)
+    """
+    if 'stdout' in kwargs:
+        raise ValueError('stdout argument not allowed, it will be overridden.')
+    if 'stderr' in kwargs:
+        raise ValueError('stderr argument not allowed, it will be overridden.')
+    process = subprocess.Popen(stdout=subprocess.PIPE, stderr=subprocess.PIPE, *popenargs, **kwargs)
+    output, err = process.communicate()
+    retcode = process.poll()
+    if retcode:
+        cmd = kwargs.get("args")
+        if cmd is None:
+            cmd = popenargs[0]
+        exc = subprocess.CalledProcessError(retcode, cmd, output=output)
+        exc.stderr = err
+        raise exc
+    return output
+
+def run(command, **kwargs):
+    print "$ %s" % (command,)
+    return check_output(command, shell=True, **kwargs)
+
+def overrideEnvironment(**kwargs):
+    env = os.environ.copy()
+    for key in kwargs:
+        if kwargs[key] is None:
+            del env[key]
+        else:
+            env[key] = kwargs[key]
+    return env
 
 class TestDXClient(unittest.TestCase):
     project = None
@@ -146,6 +178,196 @@ class TestDXClient(unittest.TestCase):
         # compare output of old and new
 
         run(u"yes|dx rmproject {p}".format(p=project))
+
+class TestDXBuildApp(unittest.TestCase):
+    def setUp(self):
+        self.temp_file_path = tempfile.mkdtemp()
+    def tearDown(self):
+        shutil.rmtree(self.temp_file_path)
+
+    # Be sure to use the check_output defined in this module if you wish
+    # to use stderr_regexp. Python's usual subprocess.check_output
+    # doesn't propagate stderr back to us.
+    @contextmanager
+    def assertSubprocessFailure(self, output_regexp=None, stderr_regexp=None, exit_code=3):
+        try:
+            yield
+        except subprocess.CalledProcessError as e:
+            self.assertEqual(exit_code, e.returncode, "Expected command to return code %d but it returned code %d" % (exit_code, e.returncode))
+            if output_regexp:
+                print "stdout:"
+                print e.output
+                self.assertTrue(re.search(output_regexp, e.output), "Expected stdout to match '%s' but it didn't" % (output_regexp,))
+            if stderr_regexp:
+                if not hasattr(e, 'stderr'):
+                    raise Exception('A stderr_regexp was supplied but the CalledProcessError did not return the contents of stderr')
+                print "stderr:"
+                print e.stderr
+                self.assertTrue(re.search(stderr_regexp, e.stderr), "Expected stdout to match '%s' but it didn't" % (stderr_regexp,))
+            return
+        self.assertFalse(True, "Expected command to fail with CalledProcessError but it succeeded")
+
+    def write_app_directory(self, app_name, dxapp_str, code_filename=None):
+        os.mkdir(os.path.join(self.temp_file_path, app_name))
+        with open(os.path.join(self.temp_file_path, app_name, 'dxapp.json'), 'w') as manifest:
+            manifest.write(dxapp_str)
+        if code_filename:
+            with open(os.path.join(self.temp_file_path, app_name, code_filename), 'w') as code_file:
+                code_file.write('\n')
+        return os.path.join(self.temp_file_path, app_name)
+
+    def test_help_without_security_context(self):
+        env = overrideEnvironment(DX_SECURITY_CONTEXT=None, DX_APISERVER_HOST=None, DX_APISERVER_PORT=None, DX_APISERVER_PROTOCOL=None)
+        run("dx-build-app -h", env=env)
+
+    def test_build_applet(self):
+        app_spec = {
+            "name": "minimal_applet",
+            "dxapi": "1.0.0",
+            "runSpec": {"file": "code.py", "interpreter": "python2.7"},
+            "inputSpec": [],
+            "outputSpec": [],
+            "version": "1.0.0"
+            }
+        app_dir = self.write_app_directory("minimal_applet", json.dumps(app_spec), "code.py")
+        new_applet = json.loads(run("dx-build-applet --json " + app_dir))
+        applet_describe = json.loads(run("dx describe --json " + new_applet["id"]))
+        self.assertEqual(applet_describe["class"], "applet")
+        self.assertEqual(applet_describe["id"], applet_describe["id"])
+        self.assertEqual(applet_describe["name"], "minimal_applet")
+
+    def test_build_app(self):
+        app_spec = {
+            "name": "minimal_app",
+            "dxapi": "1.0.0",
+            "runSpec": {"file": "code.py", "interpreter": "python2.7"},
+            "inputSpec": [],
+            "outputSpec": [],
+            "version": "1.0.0"
+            }
+        app_dir = self.write_app_directory("minimal_app", json.dumps(app_spec), "code.py")
+        new_app = json.loads(run("dx-build-app --json " + app_dir))
+        app_describe = json.loads(run("dx describe --json " + new_app["id"]))
+        self.assertEqual(app_describe["class"], "app")
+        self.assertEqual(app_describe["id"], app_describe["id"])
+        self.assertEqual(app_describe["version"], "1.0.0")
+        self.assertEqual(app_describe["name"], "minimal_app")
+        self.assertFalse("published" in app_describe)
+
+    def test_invalid_project_context(self):
+        app_spec = {
+            "name": "invalid_project_context",
+            "dxapi": "1.0.0",
+            "runSpec": {
+                "file": "code.py",
+                "interpreter": "python2.7"
+                },
+            "inputSpec": [],
+            "outputSpec": [],
+            "version": "1.0.0"
+            }
+        app_dir = self.write_app_directory("invalid_project_context", json.dumps(app_spec), "code.py")
+        # Set the project context to a nonexistent project. This
+        # shouldn't have any effect since building an app is supposed to
+        # be hygienic.
+        env = overrideEnvironment(DX_PROJECT_CONTEXT_ID='project-B00000000000000000000000')
+        run("dx-build-app --json " + app_dir, env=env)
+
+    def test_invalid_execdepends(self):
+        app_spec = {
+            "name": "invalid_execdepends",
+            "dxapi": "1.0.0",
+            "runSpec": {
+                "file": "code.py",
+                "interpreter": "python2.7",
+                "execDepends": {"name": "oops"}
+                },
+            "inputSpec": [],
+            "outputSpec": [],
+            "version": "1.0.0"
+            }
+        app_dir = self.write_app_directory("invalid_execdepends", json.dumps(app_spec), "code.py")
+        with self.assertSubprocessFailure(stderr_regexp="Expected runSpec\.execDepends to"):
+            run("dx-build-applet --json " + app_dir)
+
+    def test_overwrite_applet(self):
+        app_spec = {
+            "name": "applet_overwriting",
+            "dxapi": "1.0.0",
+            "runSpec": {"file": "code.py", "interpreter": "python2.7"},
+            "inputSpec": [],
+            "outputSpec": [],
+            "version": "1.0.0"
+            }
+        app_dir = self.write_app_directory("applet_overwriting", json.dumps(app_spec), "code.py")
+        applet_id = json.loads(run("dx-build-applet --json " + app_dir))["id"]
+        # Verify that we can succeed by writing to a different folder.
+        run("dx mkdir subfolder")
+        run("dx-build-applet --destination=subfolder/applet_overwriting " + app_dir)
+        with self.assertSubprocessFailure():
+            run("dx-build-applet " + app_dir)
+        run("dx-build-applet -f " + app_dir)
+        # Verify that the original app was deleted by the previous
+        # dx-build-applet -f
+        with self.assertSubprocessFailure(exit_code=1):
+            run("dx describe " + applet_id)
+
+    def test_update_app_categories(self):
+        app1_spec = {
+            "name": "update_app_categories",
+            "dxapi": "1.0.0",
+            "runSpec": {"file": "code.py", "interpreter": "python2.7"},
+            "inputSpec": [],
+            "outputSpec": [],
+            "version": "1.0.0",
+            "categories": ["A"]
+            }
+        app2_spec = {
+            "name": "update_app_categories",
+            "dxapi": "1.0.0",
+            "runSpec": {"file": "code.py", "interpreter": "python2.7"},
+            "inputSpec": [],
+            "outputSpec": [],
+            "version": "1.0.1",
+            "categories": ["B"]
+            }
+        app_dir = self.write_app_directory("update_app_categories", json.dumps(app1_spec), "code.py")
+        app_id = json.loads(run("dx-build-app --json " + app_dir))['id']
+        self.assertEquals(json.loads(run("dx api " + app_id + " listCategories"))["categories"], ['A'])
+        shutil.rmtree(app_dir)
+        self.write_app_directory("update_app_categories", json.dumps(app2_spec), "code.py")
+        run("dx-build-app --json " + app_dir)
+        self.assertEquals(json.loads(run("dx api " + app_id + " listCategories"))["categories"], ['B'])
+
+    def test_build_app_autonumbering(self):
+        app_spec = {
+            "name": "build_app_autonumbering",
+            "dxapi": "1.0.0",
+            "runSpec": {"file": "code.py", "interpreter": "python2.7"},
+            "inputSpec": [],
+            "outputSpec": [],
+            "version": "1.0.0"
+            }
+        app_dir = self.write_app_directory("build_app_autonumbering", json.dumps(app_spec), "code.py")
+        run("dx-build-app --json --publish " + app_dir)
+        with self.assertSubprocessFailure(stderr_regexp="Could not create"):
+            print run("dx-build-app --json --no-version-autonumbering " + app_dir)
+        run("dx-build-app --json " + app_dir) # Creates autonumbered version
+
+    def test_build_failure(self):
+        app_spec = {
+            "name": "build_failure",
+            "dxapi": "1.0.0",
+            "runSpec": {"file": "code.py", "interpreter": "python2.7"},
+            "inputSpec": [],
+            "outputSpec": [],
+            "version": "1.0.0"
+            }
+        app_dir = self.write_app_directory("build_failure", json.dumps(app_spec), "code.py")
+        with open(os.path.join(app_dir, 'Makefile'), 'w') as makefile:
+            makefile.write("all:\n\texit 7")
+        with self.assertSubprocessFailure(stderr_regexp="make -j[0-9]+ in target directory failed with exit code"):
+            run("dx-build-applet " + app_dir)
 
 if __name__ == '__main__':
     unittest.main()

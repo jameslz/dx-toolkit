@@ -42,7 +42,7 @@ NUM_CORES = multiprocessing.cpu_count()
 DX_TOOLKIT_PKGS = ['dx-toolkit', 'dx-toolkit-beta', 'dx-toolkit-unstable']
 DX_TOOLKIT_GIT_URLS = ["git@github.com:dnanexus/dx-toolkit.git"]
 
-class AppletBuilderException(Exception):
+class AppBuilderException(Exception):
     """
     This exception is raised by the methods in this module when app or applet
     building fails.
@@ -51,7 +51,7 @@ class AppletBuilderException(Exception):
 
 def _validate_applet_spec(applet_spec):
     if 'runSpec' not in applet_spec:
-        raise AppletBuilderException("Required field 'runSpec' not found in dxapp.json")
+        raise AppBuilderException("Required field 'runSpec' not found in dxapp.json")
 
 def _validate_app_spec(app_spec):
     pass
@@ -87,12 +87,18 @@ def build(src_dir):
     config_script = os.path.join(src_dir, "configure")
     if os.path.isfile(config_script) and os.access(config_script, os.X_OK):
         logging.debug("Running ./configure")
-        subprocess.check_call([config_script])
+        try:
+            subprocess.check_call([config_script])
+        except subprocess.CalledProcessError as e:
+            raise AppBuilderException("./configure in target directory failed with exit code %d" % (e.returncode,))
     if os.path.isfile(os.path.join(src_dir, "Makefile")) \
         or os.path.isfile(os.path.join(src_dir, "makefile")) \
         or os.path.isfile(os.path.join(src_dir, "GNUmakefile")):
         logging.debug("Building with make -j%d" % (NUM_CORES,))
-        subprocess.check_call(["make", "-C", src_dir, "-j" + str(NUM_CORES)])
+        try:
+            subprocess.check_call(["make", "-C", src_dir, "-j" + str(NUM_CORES)])
+        except subprocess.CalledProcessError as e:
+            raise AppBuilderException("make -j%d in target directory failed with exit code %d" % (NUM_CORES, e.returncode))
 
 def get_destination_project(src_dir, project=None):
     """
@@ -172,7 +178,7 @@ def upload_applet(src_dir, uploaded_resources, check_name_collisions=True, overw
         try:
             applet_spec['name'] = os.path.basename(os.path.abspath(src_dir))
         except:
-            raise AppletBuilderException("Could not determine applet name from the specification (dxapp.json) or from the name of the working directory (%r)" % (src_dir,))
+            raise AppBuilderException("Could not determine applet name from the specification (dxapp.json) or from the name of the working directory (%r)" % (src_dir,))
 
     if override_folder:
         applet_spec['folder'] = override_folder
@@ -194,7 +200,7 @@ def upload_applet(src_dir, uploaded_resources, check_name_collisions=True, overw
                 # TODO: test me
                 dxpy.DXProject(dest_project).remove_objects([result['id']])
             else:
-                raise AppletBuilderException("An applet already exists at %s (id %s) and the --overwrite (-f) option was not given" % (destination_path, result['id']))
+                raise AppBuilderException("An applet already exists at %s (id %s) and the --overwrite (-f) option was not given" % (destination_path, result['id']))
 
     # -----
     # Override various fields from the pristine dxapp.json
@@ -251,14 +257,16 @@ def upload_applet(src_dir, uploaded_resources, check_name_collisions=True, overw
     elif dx_toolkit_autodep == "unstable":
         dx_toolkit_dep = {"name": "dx-toolkit-unstable", "package_manager": "apt"}
     elif dx_toolkit_autodep:
-        raise AppletBuilderException("dx_toolkit_autodep must be one of 'stable', 'beta', 'unstable', 'git', or False; got %r instead" % (dx_toolkit_autodep,))
+        raise AppBuilderException("dx_toolkit_autodep must be one of 'stable', 'beta', 'unstable', 'git', or False; got %r instead" % (dx_toolkit_autodep,))
 
     if dx_toolkit_autodep:
         applet_spec["runSpec"].setdefault("execDepends", [])
-        dx_toolkit_dep_found = any(dep.get('name') in DX_TOOLKIT_PKGS or dep.get('url') in DX_TOOLKIT_GIT_URLS
-                                   for dep in applet_spec["runSpec"]["execDepends"])
+        exec_depends = applet_spec["runSpec"]["execDepends"]
+        if type(exec_depends) is not list or any(type(dep) is not dict for dep in exec_depends):
+            raise AppBuilderException("Expected runSpec.execDepends to be an array of objects")
+        dx_toolkit_dep_found = any(dep.get('name') in DX_TOOLKIT_PKGS or dep.get('url') in DX_TOOLKIT_GIT_URLS for dep in exec_depends)
         if not dx_toolkit_dep_found:
-            applet_spec["runSpec"]["execDepends"].append(dx_toolkit_dep)
+            exec_depends.append(dx_toolkit_dep)
             if dx_toolkit_autodep == "git":
                 applet_spec.setdefault("access", {})
                 applet_spec["access"].setdefault("network", [])
@@ -273,14 +281,14 @@ def upload_applet(src_dir, uploaded_resources, check_name_collisions=True, overw
         print "Would create the following applet:"
         print json.dumps(applet_spec, indent=2)
         print "*** DRY-RUN-- no applet was created ***"
-        return
+        return None, None
 
     applet_id = dxpy.api.appletNew(applet_spec)["id"]
 
     if "categories" in applet_spec:
         dxpy.DXApplet(applet_id, project=dest_project).add_tags(applet_spec["categories"])
 
-    return applet_id
+    return applet_id, applet_spec
 
 def _create_or_update_version(app_name, version, app_spec, try_update=True):
     """
@@ -321,16 +329,15 @@ def _update_version(app_name, version, app_spec, try_update=True):
             return None
         raise e
 
-def create_app(applet_id, src_dir, publish=False, set_default=False, billTo=None, try_versions=None, try_update=True):
+def create_app(applet_id, applet_name, src_dir, publish=False, set_default=False, billTo=None, try_versions=None, try_update=True):
     """
     Creates a new app object from the specified applet.
     """
     app_spec = _get_app_spec(src_dir)
     print >> sys.stderr, "Will create app with spec: ", app_spec
 
-    applet_desc = dxpy.DXApplet(applet_id).describe()
     app_spec["applet"] = applet_id
-    app_spec["name"] = applet_desc["name"]
+    app_spec["name"] = applet_name
 
     if billTo:
         app_spec["billTo"] = billTo
@@ -388,7 +395,7 @@ def create_app(applet_id, src_dir, publish=False, set_default=False, billTo=None
             tried_versions = 'any of the requested versions: ' + ', '.join(try_versions)
         else:
             tried_versions = 'the requested version: ' + try_versions[0]
-        raise EnvironmentError('Could not create %s' % (tried_versions,))
+        raise AppBuilderException('Could not create %s' % (tried_versions,))
 
     # Set categories appropriately.
     categories_to_set = app_spec.get("categories", [])

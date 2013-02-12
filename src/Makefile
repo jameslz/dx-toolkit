@@ -40,7 +40,7 @@ all: api_wrappers cpp src_libs python dx-contigset-to-fasta dx-verify-file dx-wi
 
 toolkit_version:
 	(if [ ! -e "$(DNANEXUS_HOME)/src/python/dxpy/toolkit_version.py" ]; then echo "version = \"UNKNOWN_VERSION\"" > "$(DNANEXUS_HOME)/src/python/dxpy/toolkit_version.py"; fi)
-	(if [ -d "$(DNANEXUS_HOME)/.git" ]; then echo "version = \"`git describe`\"" > "$(DNANEXUS_HOME)/src/python/dxpy/toolkit_version.py"; fi)
+	(if [ -d "$(DNANEXUS_HOME)/.git" ]; then echo "version = \"`git describe`\"" > "$(DNANEXUS_HOME)/src/python/dxpy/toolkit_version.py"; R/dxR-build-templates/generate_files.py `git describe`; fi)
 
 api_wrappers:
 	($(CXX) -O -Wall -o ../bin/generateWrapperTable api_wrappers/generateWrapperTable.cpp)
@@ -51,6 +51,8 @@ api_wrappers:
 	cat ../build/wrapper_table.json | api_wrappers/generateJSAPIWrappers.py > javascript/DNAnexusAPI.js
 	cat ../build/wrapper_table.json | api_wrappers/generatePerlAPIWrappers.py > perl/lib/DNAnexus/API.pm
 	cat ../build/wrapper_table.json | api_wrappers/generateJavaAPIWrappers.py > java/src/main/java/com/dnanexus/DXAPI.java
+	cat ../build/wrapper_table.json | api_wrappers/generateRAPIWrappers.py > R/dxR/R/api.R
+	cat ../build/wrapper_table.json | api_wrappers/generateRWrapperList.py > R/dxR-build-templates/list-of-api-wrappers.txt
 	touch -r "../build/list_of_all_routes.txt" python/dxpy/api.py cpp/dxcpp/api.h cpp/dxcpp/api.cc \
 		javascript/DNAnexusAPI.js perl/lib/DNAnexus/API.pm java/src/main/java/com/dnanexus/DXAPI.java
 	rm ../bin/generateWrapperTable
@@ -83,6 +85,7 @@ python: api_wrappers toolkit_version python_deps
 	mkdir -p "$(DNANEXUS_HOME)/share/dnanexus/lib"
 	cp -a "$(DNANEXUS_PY27_ENV)/lib/python2.7/site-packages" "$(DNANEXUS_HOME)/lib/python2.7/"
 	(source ../environment; export PYTHONPATH="$(DNANEXUS_HOME)/lib/python2.7/site-packages:${PYTHONPATH}"; cd python; python2.7 ./setup.py build; python2.7 ./setup.py install --prefix="$(DNANEXUS_HOME)"; mv $(DNANEXUS_HOME)/lib/python2.7 $(DNANEXUS_HOME)/share/dnanexus/lib)
+	rm -f ../bin/easy_install*
 
 # TODO: fix up perl and java targets
 
@@ -93,6 +96,10 @@ java: api_wrappers
 	mkdir -p "$(DNANEXUS_HOME)/lib/java"
 	(cd java; mvn compile assembly:single)
 	cp -f java/target/*.jar "$(DNANEXUS_HOME)/lib/java"
+
+R: api_wrappers toolkit_version
+	mkdir -p "$(DNANEXUS_HOME)/lib/R"
+	(cd R; export R_LIBS_SITE="$(DNANEXUS_HOME)/lib/R"; R CMD BATCH install_dxR_deps.R; R CMD INSTALL --build dxR --library="$(DNANEXUS_HOME)/lib/R"; )
 
 # Tools
 # =====
@@ -180,6 +187,11 @@ doc_java:
 	mkdir -p ../doc/java
 	(cd java; mvn compile javadoc:javadoc)
 
+doc_R: R
+	mkdir -p ../doc/R
+	(cd R; export R_LIBS_SITE="$(DNANEXUS_HOME)/lib/R"; R CMD BATCH install_dxR_deps.R; R CMD INSTALL --build dxR --html --library="$(DNANEXUS_HOME)/lib/R"; cp -r "$(DNANEXUS_HOME)/lib/R/dxR/DESCRIPTION" "$(DNANEXUS_HOME)/lib/R/dxR/html/" "$(DNANEXUS_HOME)/doc/R/.")
+	R/dxR-sanitize-htmldocs.py
+
 # Clean
 # =====
 
@@ -193,7 +205,6 @@ clean:
 	-rm -f ../bin/contigset2fasta
 	-rm -rf python/build
 	-rm -rf java/target
-	-rm -f ../bin/pyrsa-*
 	-rm -f ../build/wrapper_table.json
 	-rm -rf ../lib
 	-rm -rf ../share

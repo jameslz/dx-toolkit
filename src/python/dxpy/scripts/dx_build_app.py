@@ -21,10 +21,15 @@ logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('requests.packages.urllib3.connectionpool').setLevel(logging.ERROR)
 
 import os, sys, json, subprocess, argparse
+import locale
 import shutil
 import tempfile
+import time
 from datetime import datetime
 import dxpy, dxpy.app_builder
+
+# Use default locale (used for formatting numbers nicely)
+locale.setlocale(locale.LC_ALL, '')
 
 from dxpy.utils.resolver import resolve_path, is_container_id
 
@@ -207,12 +212,49 @@ def _build_app_remote(mode, src_dir, destination=None, publish=False, dx_toolkit
         # reasonable to write in the job name below.
         src_dir = os.path.realpath(src_dir)
 
+        # Show the user some progress as the tarball is being generated.
+        # Hopefully this will help them to understand when their tarball
+        # is huge (e.g. the target directory already has a whole bunch
+        # of binaries in it) and interrupt before uploading begins.
         app_tarball_file = os.path.join(temp_dir, "app_tarball.tar.gz")
         # TODO: figure out if we can use --exclude-vcs here (conditional
         # on presence of GNU tar). This might require propagating the
         # --version directly to the interior dx-build-app since in
         # general that can depend on the git metadata.
-        subprocess.check_call(["tar", "-czf", app_tarball_file, "."], cwd=src_dir)
+        tar_subprocess = subprocess.Popen(["tar", "-czf", "-", "."], cwd=src_dir, stdout=subprocess.PIPE)
+        with open(app_tarball_file, 'w') as tar_output_file:
+            total_num_bytes = 0
+            last_console_update = 0
+            start_time = time.time()
+            printed_static_message = False
+            # Pipe the output of tar into the output file, and
+            while True:
+                tar_exitcode = tar_subprocess.poll()
+                data = tar_subprocess.stdout.read(4 * 1024 * 1024)
+                if tar_exitcode is not None and len(data) == 0:
+                    break
+                tar_output_file.write(data)
+                total_num_bytes += len(data)
+                current_time = time.time()
+                # Don't show status messages at all for very short tar
+                # operations (< 1.0 sec)
+                if current_time - last_console_update > 0.25 and current_time - start_time > 1.0:
+                    if sys.stderr.isatty():
+                        if last_console_update > 0:
+                            sys.stderr.write("\r")
+                        sys.stderr.write("Compressing target directory %s... (%s kb)" % (src_dir, locale.format("%d", (total_num_bytes / 1024,), grouping=True),))
+                        sys.stderr.flush()
+                        last_console_update = current_time
+                    elif not printed_static_message:
+                        # Print a message (once only) when stderr is not
+                        # going to a live console
+                        sys.stderr.write("Compressing target directory %s..." % (src_dir,))
+                        printed_static_message = True
+
+        if last_console_update > 0:
+            sys.stderr.write("\n")
+        if tar_exitcode != 0:
+            raise Exception("tar exited with non-zero exit code " + str(tar_exitcode))
 
         dxpy.set_workspace_id(build_project_id)
 
@@ -220,7 +262,6 @@ def _build_app_remote(mode, src_dir, destination=None, publish=False, dx_toolkit
                                              wait_on_close=True, show_progress=True)
 
         try:
-            print
             input_hash = {
                 "input_file": dxpy.dxlink(remote_file),
                 "extra_flags": " ".join(extra_flags)
@@ -343,14 +384,16 @@ def main(**kwargs):
                     args.dx_toolkit_autodep = "stable"
                 else:
                     args.dx_toolkit_autodep = "beta"
-            applet_id = dxpy.app_builder.upload_applet(args.src_dir, bundled_resources,
-                                                       check_name_collisions=(args.mode == "applet"),
-                                                       overwrite=args.overwrite and args.mode == "applet",
-                                                       project=working_project,
-                                                       override_folder = override_folder,
-                                                       override_name = override_applet_name,
-                                                       dx_toolkit_autodep=args.dx_toolkit_autodep,
-                                                       dry_run=args.dry_run)
+            applet_id, applet_spec = dxpy.app_builder.upload_applet(
+                args.src_dir,
+                bundled_resources,
+                check_name_collisions=(args.mode == "applet"),
+                overwrite=args.overwrite and args.mode == "applet",
+                project=working_project,
+                override_folder=override_folder,
+                override_name=override_applet_name,
+                dx_toolkit_autodep=args.dx_toolkit_autodep,
+                dry_run=args.dry_run)
         except:
             # Avoid leaking any bundled_resources files we may have
             # created, if applet creation fails. Note that if
@@ -366,6 +409,8 @@ def main(**kwargs):
         if args.dry_run:
             return
 
+        applet_name = applet_spec['name']
+
         print >> sys.stderr, "Created applet " + applet_id + " successfully"
 
         if args.mode == "app":
@@ -376,7 +421,9 @@ def main(**kwargs):
             if not args.version_override and args.version_autonumbering:
                 try_versions.append(version + get_version_suffix(args.src_dir))
 
-            app_id = dxpy.app_builder.create_app(applet_id, args.src_dir,
+            app_id = dxpy.app_builder.create_app(applet_id,
+                                                 applet_name,
+                                                 args.src_dir,
                                                  publish=args.publish,
                                                  set_default=args.publish,
                                                  billTo=args.bill_to,
@@ -398,13 +445,13 @@ def main(**kwargs):
             if args.json:
                 print json.dumps(dxpy.api.appletDescribe(applet_id))
         else:
-            raise ValueError("Unrecognized mode %r" % (args.mode,))
+            raise dxpy.app_builder.AppBuilderException("Unrecognized mode %r" % (args.mode,))
 
-    except dxpy.app_builder.AppletBuilderException as e:
-        # AppletBuilderException represents errors during applet
-        # building that could reasonably have been anticipated.
-        print "Error: %s" % (e.message,)
-        sys.exit(1)
+    except dxpy.app_builder.AppBuilderException as e:
+        # AppBuilderException represents errors during app or applet building
+        # that could reasonably have been anticipated by the user.
+        print >> sys.stderr, "Error: %s" % (e.message,)
+        sys.exit(3)
 
     finally:
         # Clean up after ourselves.
