@@ -2,15 +2,15 @@
 \name{dxR-package}
 \alias{dxR}
 \alias{dxR-package}
-\title{DNAnexus R Client Library}
+\title{##' DNAnexus R Client Library}
 \description{
   dxR is an R extension containing API wrapper functions
   for interacting with the new DNAnexus platform.
 }
 \details{
   \tabular{ll}{ Package: \tab dxR\cr Type: \tab Package\cr
-  Version: \tab 0.37.0\cr Date: \tab 2013-02-14\cr License:
-  \tab Apache License (== 2.0)\cr }
+  Version: \tab 0.37.0\cr License: \tab Apache License (==
+  2.0)\cr }
 }
 \author{
   Katherine Lai
