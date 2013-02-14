@@ -40,7 +40,11 @@ getFromJSONEnv <- function() {
     return (emptyNamedList)
   })
   for (varname in names(configjson)) {
-    assign(varname, configjson[[varname]], envir=dxEnv)
+    if (dxEnv[[varname]] == '') {
+      # Only use the value found if it was *not* found in the
+      # environment variables
+      assign(varname, configjson[[varname]], envir=dxEnv)
+    }
   }
 }
 
