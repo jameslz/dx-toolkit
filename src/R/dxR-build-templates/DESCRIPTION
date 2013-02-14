@@ -10,3 +10,4 @@ Description: dxR is an R extension containing API wrapper functions for
 License: Apache License (== 2.0)
 Imports: RCurl
 Depends: RJSONIO
+Suggests: testthat

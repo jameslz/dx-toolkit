@@ -7,3 +7,6 @@ if("RJSONIO" %in% rownames(installed.packages()) == FALSE) {
 if("roxygen2" %in% rownames(installed.packages()) == FALSE) {
   install.packages("roxygen2", lib=.Library.site[1], dependencies=TRUE, repos="http://cran.us.r-project.org")
 }
+if("testthat" %in% rownames(installed.packages()) == FALSE) {
+  install.packages("testthat", lib=.Library.site[1], dependencies=TRUE, repos="http://cran.us.r-project.org")
+}

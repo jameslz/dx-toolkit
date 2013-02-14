@@ -98,7 +98,7 @@ java: api_wrappers
 
 R: api_wrappers toolkit_version
 	mkdir -p "$(DNANEXUS_HOME)/lib/R"
-	(cd R; export R_LIBS_SITE="$(DNANEXUS_HOME)/lib/R"; R --no-save < install_dxR_deps.R; R -e "library(roxygen2); roxygenize(\"dxR\")"; R CMD INSTALL --build dxR --library="$(DNANEXUS_HOME)/lib/R"; )
+	(cd R; export R_LIBS_SITE="$(DNANEXUS_HOME)/lib/R"; R --no-save < install_dxR_build_deps.R; R -e "library(roxygen2); roxygenize(\"dxR\")"; R CMD INSTALL --build dxR --library="$(DNANEXUS_HOME)/lib/R"; )
 
 # Tools
 # =====
