@@ -42,6 +42,7 @@
 #endif
 
 using namespace std;
+using namespace dx;
 
 #if (WINDOWS_BUILD || MAC_BUILD)
 #if (WINDOWS_BUILD)
@@ -557,7 +558,11 @@ void disallowDuplicateFiles(const vector<string> &files, const vector<string> &p
   }
 }
 
+// This function sets two kind of user agent strings
+//  1) For Upload Agent libcurl calls (/UPLOAD/xxxx calls)
+//  2) For dxcpp libcurl calls (using dx::config::USER_AGENT_STRING())
 void setUserAgentString() {
+  // Set user agent string for libcurl calls, directly by Upload Agent
   bool windows_env = false;
 #ifdef WINDOWS_BUILD
   windows_env = true;
@@ -568,51 +573,81 @@ void setUserAgentString() {
   int r1 = rand(), r2 = rand();
   stringstream iHash;
   iHash << std::hex << r1 << "-" << std::hex << r2;
-  userAgentString = string("DNAnexus-Upload-Agent/") + UAVERSION;
+  userAgentString = string("DNAnexus-Upload-Agent/") + UAVERSION + "/" + string(DXTOOLKIT_GITVERSION);
   userAgentString += (windows_env) ? " (WINDOWS_BUILD=true)" : "";
-  userAgentString += string(" git-version/") + GITVERSION + " Instance-Hash/" + iHash.str();
+  userAgentString += " uid/" + iHash.str();
+
+  // Update user agent string of dxcpp
+  dx::config::USER_AGENT_STRING() = userAgentString + " " + dx::config::USER_AGENT_STRING(); 
 }
 
+// This function should be called before opt.setApiserverDxConfig() is called,
+// since opt::setApiserverDxConfig() changes the value of dx::config::*, based on command line args
 void printEnvironmentInfo() {
-  cout << "Environment info:" << endl
-       << "  API server protocol: " << opt.apiserverProtocol << endl
-       << "  API server host: " << opt.apiserverHost << endl
-       << "  API server port: " << opt.apiserverPort << endl
-       << "  Auth token: " << opt.authToken << endl; 
-  cout << "  Project: " << ((opt.projects.size() > 0) ? opt.projects[0] : "") << endl; 
+  using namespace dx::config;
+
+  cout << "Upload Agent v" << UAVERSION << ", environment info:" << endl
+       << "  API server protocol: " << APISERVER_PROTOCOL() << endl
+       << "  API server host: " << APISERVER_HOST() << endl
+       << "  API server port: " << APISERVER_PORT() << endl;
+  if (SECURITY_CONTEXT().size() != 0)
+    cout << "  Auth token: " << SECURITY_CONTEXT()["auth_token"].get<string>() << endl;
+  else
+    cout << "  Auth token: " << endl;
+
+  cout << "  Project: " << CURRENT_PROJECT() << endl;
 }
 
 int main(int argc, char * argv[]) {
   try {
+    // Note: Verbose mode logging is enabled (if requested) by options parse()
     opt.parse(argc, argv);
   } catch (exception &e) {
     cerr << "Error processing arguments: " << e.what() << endl;
     opt.printHelp(argv[0]);
     return 1;
   }
-  // Note: Verbose mode logging is now enabled by options parse()
+ 
   if (opt.env()) {
     printEnvironmentInfo();
     return 0;
   }
   if (opt.version()) {
     cout << "Upload Agent Version: " << UAVERSION << endl
-         << "git version: " << GITVERSION << endl;
+         << "git version: " << DXTOOLKIT_GITVERSION << endl;
     return 0;
   } else if (opt.help() || opt.files.empty()) {
     opt.printHelp(argv[0]);
     return 1;
   }
-
-  setUserAgentString();
-
-  LOG << "DNAnexus Upload Agent " << UAVERSION << " (git version: " << GITVERSION << ")" << endl;
-  LOG << "User Agent string: '" << userAgentString << "'" << endl;
+  
+  setUserAgentString(); // also sets dx::config::USER_AGENT_STRING()
+  
+  LOG << "DNAnexus Upload Agent " << UAVERSION << " (git version: " << DXTOOLKIT_GITVERSION << ")" << endl;
+  LOG << "Upload agent's User Agent string: '" << userAgentString << "'" << endl;
+  LOG << "dxcpp's User Agent string: '" << dx::config::USER_AGENT_STRING() << "'" << endl;
   LOG << opt;
   try {
+    opt.setApiserverDxConfig();
     opt.validate();
-    apiInit(opt.apiserverHost, opt.apiserverPort, opt.apiserverProtocol, opt.authToken); // sets g_APISERVER_*, g_SECURITY_CONTEXT variable (for dxcpp)
-    g_dxcpp_mute_retry_cerrs = !opt.verbose; // a dirty hack, to silent dxcpp's error messages (printed when retrying)
+    dx::g_dxcpp_mute_retry_cerrs = !opt.verbose; // a dirty hack, to silent dxcpp's error messages (printed when retrying)
+    
+    // Check for updates, and terminate execution if necessary
+    // Note: - It's important to call this function before testServerConnection()
+    //         because, if the client is too old, testServerConnection() would fail with "ClientTooOld" error (since it calls /system/findUsers).
+    //       - If server is unreachable, checkForUpdates() will just print a warning on LOG
+    //         the actual unreachability of server (and subsequent action) will still be determined by testServerConnection()
+    // TODO: Once production has /system/greet route, we can subsume testServerConnection() into checkForUpdates()
+    //       , i.e., we can use /system/greet route to test apiserver connection as well (instead of findUsers).
+    //       But one important point to be noted: /findUsers route check the fact that auth token is not from public,
+    //       whereas /system/greet does not (so we must find another way to test that fact for auth token).
+    //       (for example: later calls, like creating file, polling project, etc will fail)
+    try {
+      checkForUpdates();
+    } catch (runtime_error &e) {
+      cerr << e.what() << endl;
+      return 3;
+    }
     testServerConnection();
     if (!opt.doNotResume) {
       disallowDuplicateFiles(opt.files, opt.projects);
@@ -621,6 +656,7 @@ int main(int argc, char * argv[]) {
     cerr << "ERROR: " << e.what() << endl;
     return 1;
   }
+  
   const bool anyImportAppToBeCalled = (opt.reads || opt.pairedReads || opt.mappings || opt.variants);
   if (anyImportAppToBeCalled) {
     LOG << "User requested an import app to be called at the end of upload. Will explicitly turn on --wait-on-close flag (if not present already)" << endl;

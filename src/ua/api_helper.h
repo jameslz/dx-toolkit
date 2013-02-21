@@ -20,8 +20,6 @@
 #include <string>
 #include "dxjson/dxjson.h"
 
-void apiInit(const std::string &apiserverHost, const int apiserverPort, const std::string &apiserverProtocol, const std::string &authToken);
-
 void testServerConnection(void);
 
 std::string resolveProject(const std::string &projectSpec);
@@ -39,6 +37,8 @@ std::string getFileState(const std::string &fileID);
 dx::JSON findResumableFileObject(std::string project, std::string signature);
 
 void removeFromProject(const std::string &projID, const std::string &objID);
+
+void checkForUpdates();
 
 #define FILE_SIGNATURE_PROPERTY ".system-fileSignature"
 #endif
