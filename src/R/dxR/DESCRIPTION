@@ -21,3 +21,4 @@ Collate:
     'AllClasses.R'
     'AllGenerics.R'
     'DXGTable-methods.R'
+    'show-methods.R'

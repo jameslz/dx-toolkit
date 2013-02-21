@@ -22,19 +22,26 @@ library(methods)
 ##'
 ##' Construct a GenomicTable(GTable) handler using an object ID of the
 ##' form "gtable-xxxx".  If a project ID is not provided, the default
-##' container (project or a job's temporary workspace) is used if available.
+##' project (project or a job's temporary workspace) is used if available.
 ##'
 ##' @param id String object ID
-##' @param container String project or container ID
+##' @param project String project or container ID
+##' @param describe Whether to cache a description of the gtable
 ##' @return An R object of class DXGTable
 ##' @rdname DXGTable
 ##' @examples
-##' DXGTable("gtable-xxxx")
-##' DXGTable("gtable-xxxx", container="project-xxxx")
+##' DXGTable("gtable-123456789012345678901234", describe=FALSE)
+##' DXGTable("gtable-123456789012345678901234", project="project-12345678901234567890abcd", describe=FALSE)
 ##' @export
-DXGTable <- function(id, container=dxEnv$DEFAULT_CONTAINER) {
-  new("DXGTable", id=id, container=container)
+DXGTable <- function(id, project=dxEnv$DEFAULT_PROJECT, describe=TRUE) {
+  handler <- new("DXGTable", id=id, project=project)
+  if (describe) {
+    desc(handler) <- describe(handler)
+  }
+  return (handler)
 }
+
+# TODO: constructors for opening a gtable for reading or writing
 
 ##' Get the ID from a DNAnexus handler
 ##'
@@ -45,11 +52,62 @@ DXGTable <- function(id, container=dxEnv$DEFAULT_CONTAINER) {
 ##' @docType methods
 ##' @rdname id-methods
 ##' @examples
-##' dxgtable <- DXGTable("gtable-xxxx")
+##' dxgtable <- DXGTable("gtable-123456789012345678901234", describe=FALSE)
 ##' id(dxgtable)
 ##' @export
 ##' @aliases id,DXGTable-method
 setMethod("id", "DXGTable", function(handler) {
   handler@id
 })
-  
+
+##' Describe the Data Object
+##'
+##' Returns the data frame containing columns describing the data
+##' object.
+##' 
+##' @param handler A data object handler
+##' @return named list of the data object's describe hash
+##' @docType methods
+##' @rdname describe-methods
+##' @export
+##' @aliases describe,DXGTable-method
+setMethod("describe", "DXGTable", function(handler) {
+  validObject(handler)
+  inputHash <- RJSONIO::emptyNamedList
+  if (handler@project != '') {
+    inputHash$project <- handler@project
+  }
+  dxHTTPRequest(paste("/", handler@id, "/describe", sep=''),
+                data=inputHash)
+})
+
+setReplaceMethod("desc", "DXGTable", function(object, value) {
+  object@desc <- value
+  return (object)
+})
+
+##' Get Column Names of a GTable
+##'
+##' Returns a character vector of column names of the GTable.
+##' 
+##' @param x A GTable handler
+##' @return vector of column names
+##' @docType methods
+##' @rdname names-methods
+##' @export
+##' @aliases names,DXGTable-method
+setMethod("names", "DXGTable", function(x) {
+  if (length(x@desc) == 0) {
+    desc(x) <- describe(x)
+  }
+
+  if ("columns" %in% names(x@desc)) {
+    return (sapply(x@desc$columns, function(coldesc) { return (coldesc[["name"]]) }))
+  } else {
+    stop("Did not find list of columns in the gtable description")
+  }
+})
+
+setMethod("getRows", "DXGTable", function(handler) {
+  gtableGetRows(handler@id)
+})

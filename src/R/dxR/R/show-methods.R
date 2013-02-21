@@ -14,18 +14,9 @@
 #   License for the specific language governing permissions and limitations
 #   under the License.
 
-setGeneric("id", function(handler) {
-  standardGeneric("id")
-})
-
-setGeneric("describe", function(handler) {
-  standardGeneric("describe")
-})
-
-setGeneric("desc<-", function(object, value) {
-  standardGeneric("desc<-")
-})
-
-setGeneric("getRows", function(handler) {
-  standardGeneric("getRows")
-})
+setMethod("show",
+          "DXGTable",
+          function(object) {
+            cat("DXGTable handler with ID ", object@id,
+                " in ", object@project, "\n", sep='')
+          })

@@ -14,7 +14,7 @@
   Returns the string ID of the gtable.
 }
 \examples{
-dxgtable <- DXGTable("gtable-xxxx")
+dxgtable <- DXGTable("gtable-123456789012345678901234", describe=FALSE)
 id(dxgtable)
 }
 

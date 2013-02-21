@@ -75,9 +75,9 @@ loadFromEnvironment <- function() {
   }
 
   if (dxEnv$DX_JOB_ID == '') {
-    assign('DEFAULT_CONTAINER', dxEnv$DX_PROJECT_CONTEXT_ID, envir=dxEnv)
+    assign('DEFAULT_PROJECT', dxEnv$DX_PROJECT_CONTEXT_ID, envir=dxEnv)
   } else {
-    assign('DEFAULT_CONTAINER', dxEnv$DX_WORKSPACE_ID, envir=dxEnv)
+    assign('DEFAULT_PROJECT', dxEnv$DX_WORKSPACE_ID, envir=dxEnv)
   }
 }
 

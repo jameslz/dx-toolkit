@@ -23,12 +23,34 @@ library(methods)
 ##' This class is an interface to a GenomicTable(GTable) stored on the
 ##' DNAnexus platform.
 ##'
+##' @section Slots: \describe{
+##'     \item{\code{id}}{String ID of the GTable}
+##'     \item{\code{project}}{String ID of the GTable's project}
+##'     \item{\code{.desc}}{Cached copy from calling describe on the GTable}
+##' }
+##'
 ##' @name DXGTable-class
 ##' @rdname DXGTable-class
 ##' @export
 setClass("DXGTable",
          representation(
                         id="character",
-                        container="character"
-                        )
+                        project="character",
+                        desc="list"
+                        ),
+         prototype(id='',
+                   project='',
+                   desc=RJSONIO::emptyNamedList),
+         validity=function(object) {
+           if (!any(grep("^gtable-[a-zA-Z0-9]{24}$", object@id))) {
+             return ("invalid GTable ID")
+           }
+           # Project ID must either be empty or valid
+           if (object@project != '' &&
+               !any(grep("^(project|container)-[a-zA-Z0-9]{24}$",
+                         object@project))) {
+             return ("invalid project or container ID")
+           }
+           return (TRUE)
+         }
          )
